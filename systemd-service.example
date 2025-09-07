@@ -1,0 +1,22 @@
+[Unit]
+Description=Literature News Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+Group=your_group
+WorkingDirectory=/path/to/literature-news-bot
+Environment=PATH=/path/to/literature-news-bot/venv/bin
+ExecStart=/path/to/literature-news-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (alternative to .env file)
+# Environment=TELEGRAM_BOT_TOKEN=your_token
+# Environment=TELEGRAM_CHANNEL_ID=@your_channel
+
+[Install]
+WantedBy=multi-user.target
