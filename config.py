@@ -16,12 +16,14 @@ MAX_NEWS_PER_UPDATE = int(os.getenv('MAX_NEWS_PER_UPDATE', 5))
 
 # RSS Feeds for Literature News
 LITERATURE_RSS_FEEDS = [
-    'https://www.publishersweekly.com/rss/latest-articles.xml',
     'https://www.theguardian.com/books/rss',
-    'https://www.nytimes.com/section/books/review.rss',
-    'https://feeds.feedburner.com/goodreads/blog',
     'https://lithub.com/feed/',
+    'https://feeds.feedburner.com/goodreads/blog',
     'https://bookmarks.reviews/feed/',
+    'https://www.publishersweekly.com/rss/latest-articles.xml',
+    'https://rss.cnn.com/rss/edition.rss',  # Общие новости, будут фильтроваться
+    'https://feeds.bbci.co.uk/news/rss.xml',  # BBC News
+    'https://www.npr.org/rss/rss.php?id=1008',  # NPR Books
 ]
 
 # Keywords for filtering literature news

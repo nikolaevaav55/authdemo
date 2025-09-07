@@ -8,6 +8,8 @@ import json
 import logging
 from typing import List, Dict, Optional
 import re
+import html
+from urllib.parse import urljoin, urlparse
 
 from config import (
     LITERATURE_RSS_FEEDS, 
@@ -82,47 +84,80 @@ class LiteratureNewsScraper:
         """Парсит RSS канал"""
         try:
             logger.info(f"Parsing RSS feed: {feed_url}")
-            feed = feedparser.parse(feed_url)
+            
+            # Используем requests для получения RSS с правильными заголовками
+            headers = {'User-Agent': USER_AGENT}
+            response = requests.get(feed_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Парсим RSS с помощью feedparser
+            feed = feedparser.parse(response.content)
+            
+            if not hasattr(feed, 'entries') or not feed.entries:
+                logger.warning(f"No entries found in RSS feed: {feed_url}")
+                return []
             
             news_items = []
             for entry in feed.entries:
-                # Проверяем, связана ли новость с литературой
-                title = entry.get('title', '')
-                description = entry.get('description', '') or entry.get('summary', '')
-                
-                if not self.is_literature_related(f"{title} {description}"):
+                try:
+                    # Проверяем, связана ли новость с литературой
+                    title = entry.get('title', '')
+                    description = entry.get('description', '') or entry.get('summary', '')
+                    
+                    # Декодируем HTML entities
+                    title = html.unescape(title) if title else ''
+                    description = html.unescape(description) if description else ''
+                    
+                    if not self.is_literature_related(f"{title} {description}"):
+                        continue
+                    
+                    # Парсим дату
+                    published = datetime.now()
+                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                        try:
+                            published = datetime(*entry.published_parsed[:6])
+                        except (TypeError, ValueError):
+                            # Пробуем альтернативные поля даты
+                            if hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                                try:
+                                    published = datetime(*entry.updated_parsed[:6])
+                                except:
+                                    pass
+                    
+                    # Проверяем, что новость не старше 48 часов (увеличиваем окно)
+                    if (datetime.now() - published).days > 2:
+                        continue
+                    
+                    url = entry.get('link', '')
+                    if not url or url in self.sent_news_urls:
+                        continue
+                    
+                    # Очищаем описание от HTML тегов
+                    if description:
+                        soup = BeautifulSoup(description, 'html.parser')
+                        description = soup.get_text().strip()
+                        # Убираем лишние пробелы и переносы строк
+                        description = ' '.join(description.split())
+                        # Ограничиваем длину описания
+                        if len(description) > 300:
+                            description = description[:297] + "..."
+                    
+                    source = feed.feed.get('title', 'RSS Feed')
+                    if hasattr(feed, 'feed') and hasattr(feed.feed, 'title'):
+                        source = feed.feed.title
+                    
+                    news_items.append(NewsItem(title, description, url, published, source))
+                    
+                except Exception as entry_error:
+                    logger.warning(f"Error processing RSS entry: {str(entry_error)}")
                     continue
-                
-                # Парсим дату
-                published = datetime.now()
-                if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                    try:
-                        published = datetime(*entry.published_parsed[:6])
-                    except:
-                        pass
-                
-                # Проверяем, что новость не старше 24 часов
-                if (datetime.now() - published).days > 1:
-                    continue
-                
-                url = entry.get('link', '')
-                if url in self.sent_news_urls:
-                    continue
-                
-                # Очищаем описание от HTML тегов
-                if description:
-                    soup = BeautifulSoup(description, 'html.parser')
-                    description = soup.get_text().strip()
-                    # Ограничиваем длину описания
-                    if len(description) > 300:
-                        description = description[:297] + "..."
-                
-                source = feed.feed.get('title', 'Unknown')
-                
-                news_items.append(NewsItem(title, description, url, published, source))
             
+            logger.info(f"Found {len(news_items)} relevant news items from {feed_url}")
             return news_items
             
+        except requests.RequestException as e:
+            logger.error(f"Network error parsing RSS feed {feed_url}: {str(e)}")
+            return []
         except Exception as e:
             logger.error(f"Error parsing RSS feed {feed_url}: {str(e)}")
             return []
@@ -184,29 +219,53 @@ class LiteratureNewsScraper:
     async def get_latest_literature_news(self) -> List[NewsItem]:
         """Получает последние новости о литературе из всех источников"""
         all_news = []
+        successful_feeds = 0
         
         # Парсим RSS каналы
-        for feed_url in LITERATURE_RSS_FEEDS:
-            news_items = self.parse_rss_feed(feed_url)
-            all_news.extend(news_items)
+        logger.info(f"Processing {len(LITERATURE_RSS_FEEDS)} RSS feeds...")
+        for i, feed_url in enumerate(LITERATURE_RSS_FEEDS):
+            try:
+                logger.info(f"Processing feed {i+1}/{len(LITERATURE_RSS_FEEDS)}: {feed_url}")
+                news_items = self.parse_rss_feed(feed_url)
+                if news_items:
+                    all_news.extend(news_items)
+                    successful_feeds += 1
+                    logger.info(f"✅ Successfully processed {len(news_items)} items from {feed_url}")
+                else:
+                    logger.info(f"ℹ️  No relevant news found in {feed_url}")
+            except Exception as e:
+                logger.error(f"❌ Failed to process feed {feed_url}: {str(e)}")
+                continue
+        
+        logger.info(f"Successfully processed {successful_feeds}/{len(LITERATURE_RSS_FEEDS)} RSS feeds")
         
         # Ищем через News API
-        api_news = await self.search_news_api()
-        all_news.extend(api_news)
+        try:
+            api_news = await self.search_news_api()
+            if api_news:
+                all_news.extend(api_news)
+                logger.info(f"✅ Added {len(api_news)} items from News API")
+        except Exception as e:
+            logger.error(f"❌ News API search failed: {str(e)}")
         
         # Убираем дубликаты по URL
         seen_urls = set()
         unique_news = []
         for news in all_news:
-            if news.url not in seen_urls:
+            if news.url and news.url not in seen_urls:
                 seen_urls.add(news.url)
                 unique_news.append(news)
+        
+        logger.info(f"Found {len(unique_news)} unique news items after deduplication")
         
         # Сортируем по дате публикации (новые сначала)
         unique_news.sort(key=lambda x: x.published, reverse=True)
         
         # Ограничиваем количество новостей
-        return unique_news[:MAX_NEWS_PER_UPDATE]
+        final_news = unique_news[:MAX_NEWS_PER_UPDATE]
+        logger.info(f"Returning {len(final_news)} news items (limited by MAX_NEWS_PER_UPDATE={MAX_NEWS_PER_UPDATE})")
+        
+        return final_news
     
     def mark_news_as_sent(self, news_items: List[NewsItem]):
         """Отмечает новости как отправленные"""
