@@ -16,6 +16,15 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Проверяем версию Python
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+echo -e "${GREEN}🐍 Обнаружен Python ${PYTHON_VERSION}${NC}"
+
+# Предупреждение для Python 3.13+
+if python3 -c "import sys; exit(0 if sys.version_info >= (3, 13) else 1)" 2>/dev/null; then
+    echo -e "${YELLOW}⚠️  Обнаружен Python 3.13+. Используем обновленные зависимости.${NC}"
+fi
+
 # Проверяем наличие pip
 if ! command -v pip3 &> /dev/null; then
     echo -e "${RED}❌ pip3 не найден. Установите pip3 для продолжения.${NC}"
